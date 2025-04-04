@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invoice Generator</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Times New Roman', Times, serif;
+        }
+        #previewContent {
+            padding: 20px;
+            border: 1px solid #ddd;
+        }
+        .letter-header, .letter-footer {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .table th, .table td {
+            vertical-align: middle;
+        }
+    </style>
+</head>
+<body>
+    <div class="container my-5">
+        <h1 class="text-center mb-4">Invoice Generator</h1>
+
+        <!-- Input Form -->
+        <form id="invoiceForm" class="mb-4">
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label for="date" class="form-label">Date</label>
+                    <input type="date" class="form-control" id="date" required>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label for="invoiceNo" class="form-label">Invoice Number (TSC invoice/2024-25/01 to 12)</label>
+                    <input type="text" class="form-control" id="invoiceNo" placeholder="e.g., TSC invoice/2024-25/01" required pattern="TSC invoice/2024-25/(0[1-9]|1[0-2])" title="Format: TSC invoice/2024-25/01 to TSC invoice/2024-25/12">
+                    <small class="form-text text-muted">Next suggested: <span id="nextInvoiceNo"></span></small>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label for="invoiceAmount" class="form-label">Invoice Amount (NRs)</label>
+                    <input type="number" class="form-control" id="invoiceAmount" required>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label for="invoiceMonth" class="form-label">Invoice Month</label>
+                    <input type="text" class="form-control" id="invoiceMonth" placeholder="e.g., April-24" required>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label for="annualFixedCost" class="form-label">Annual Fixed Cost (NRs)</label>
+                    <input type="number" class="form-control" id="annualFixedCost" required>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Generate Invoice</button>
+        </form>
+
+        <!-- Backup/Restore Buttons -->
+        <div class="mb-4">
+            <button class="btn btn-info" id="backupBtn">Backup Data</button>
+            <button class="btn btn-warning" id="restoreBtn">Restore Data</button>
+            <input type="file" id="restoreFile" style="display:none;" accept=".json">
+        </div>
+
+        <!-- Records Table -->
+        <h3>Saved Invoices</h3>
+        <table class="table table-striped" id="invoiceTable">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Invoice No</th>
+                    <th>Amount (NRs)</th>
+                    <th>Month</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+
+        <!-- Preview Modal -->
+        <div class="modal fade" id="previewModal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Invoice Preview</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body" id="previewContent"></div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        <button type="button" class="btn btn-success" id="downloadWordBtn">Save as Word</button>
+                        <button type="button" class="btn btn-primary" id="downloadExcelBtn">Save as Excel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/docx/7.8.2/docx.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+    <!-- JavaScript -->
+    <script>
+        // Utility to convert number to words
+        function numberToWords(num) {
+            const units = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
+            const teens = ["Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+            const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+            const thousands = ["", "Thousand", "Million"];
+
+            if (num === 0) return "Zero";
+            let words = "";
+            let i = 0;
+
+            while (num > 0) {
+                let chunk = num % 1000;
+                if (chunk) {
+                    let chunkWords = "";
+                    if (chunk >= 100) {
+                        chunkWords += units[Math.floor(chunk / 100)] + " Hundred ";
+                        chunk %= 100;
+                    }
+                    if (chunk >= 20) {
+                        chunkWords += tens[Math.floor(chunk / 10)] + " ";
+                        chunk %= 10;
+                    }
+                    if (chunk > 0 && chunk < 10) chunkWords += units[chunk] + " ";
+                    else if (chunk >= 10 && chunk < 20) chunkWords += teens[chunk - 10] + " ";
+                    words = chunkWords + thousands[i] + " " + words;
+                }
+                num = Math.floor(num / 1000);
+                i++;
+            }
+            return words.trim() + " Only";
+        }
+
+        // Load saved invoices
+        let invoices = JSON.parse(localStorage.getItem("invoices")) || [];
+
+        // Suggest next invoice number
+        function suggestNextInvoiceNo() {
+            const prefix = "TSC invoice/2024-25/";
+            const existingNos = invoices
+                .filter(inv => inv.invoiceNo.startsWith(prefix))
+                .map(inv => parseInt(inv.invoiceNo.replace(prefix, "")))
+                .sort((a, b) => a - b);
+            let nextNo = 1;
+            if (existingNos.length > 0) {
+                nextNo = existingNos[existingNos.length - 1] + 1;
+            }
+            if (nextNo > 12) nextNo = 1; // Reset to 01 if exceeds 12
+            const formattedNo = nextNo < 10 ? `0${nextNo}` : nextNo;
+            document.getElementById("nextInvoiceNo").textContent = `${prefix}${formattedNo}`;
+            return `${prefix}${formattedNo}`;
+        }
+
+        function renderTable() {
+            const tbody = document.querySelector("#invoiceTable tbody");
+            tbody.innerHTML = "";
+            invoices.forEach((inv, index) => {
+                const row = document.createElement("tr");
+                row.innerHTML = `
+                    <td>${inv.date}</td>
+                    <td>${inv.invoiceNo}</td>
+                    <td>${inv.invoiceAmount}</td>
+                    <td>${inv.invoiceMonth}</td>
+                    <td>
+                        <button class="btn btn-sm btn-warning" onclick="editInvoice(${index})">Edit</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteInvoice(${index})">Delete</button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+            suggestNextInvoiceNo(); // Update suggested invoice number
+        }
+
+        // Form submission
+        document.getElementById("invoiceForm").addEventListener("submit", function (e) {
+            e.preventDefault();
+            const invoiceNo = document.getElementById("invoiceNo").value;
+            const regex = /^TSC invoice\/2024-25\/(0[1-9]|1[0-2])$/;
+            if (!regex.test(invoiceNo)) {
+                alert("Invoice number must be in the format 'TSC invoice/2024-25/01' to 'TSC invoice/2024-25/12'");
+                return;
+            }
+            if (invoices.some(inv => inv.invoiceNo === invoiceNo)) {
+                alert("This invoice number already exists!");
+                return;
+            }
+
+            const invoice = {
+                date: document.getElementById("date").value,
+                invoiceNo: invoiceNo,
+                invoiceAmount: document.getElementById("invoiceAmount").value,
+                invoiceMonth: document.getElementById("invoiceMonth").value,
+                annualFixedCost: document.getElementById("annualFixedCost").value
+            };
+
+            invoices.push(invoice);
+            localStorage.setItem("invoices", JSON.stringify(invoices));
+            renderTable();
+            generatePreview(invoice);
+            this.reset();
+        });
+
+        // Generate Preview
+        function generatePreview(invoice) {
+            const amountWords = numberToWords(parseInt(invoice.invoiceAmount));
+            const previewContent = document.getElementById("previewContent");
+            previewContent.innerHTML = `
+                <div class="letter-header">
+                    <h4>Power Transmission Company Nepal Limited</h4>
+                    <p>Our Ref No. 2080/81 - Miti: 2081/01/20</p>
+                    <p>Date: ${invoice.date}</p>
+                </div>
+                <p>The Managing Director<br>Nepal Electricity Authority<br>Durbar Marg, Kathmandu<br>NEPAL</p>
+                <p><strong>Sub:- Transmission Service Charges for Dhalkebar - Bhittamod 400 kV D/C Transmission Line (Nepal Portion of Dhalkebar - Muzaffarpur -400 kV D/C Transmission Line) Invoice No. ${invoice.invoiceNo}</strong></p>
+                <p>Dear Sir,</p>
+                <p>This has reference to the "Implementation & Transmission Service Agreement" signed between NEA & PTCN on December 13, 2011 for TLP-Nepal.</p>
+                <p>As per Section-10 (Payment and Billing of Transmission Service Charges) of the said Agreement, we are enclosing herewith Invoice No. ${invoice.invoiceNo} dated ${invoice.date} for NRs. ${invoice.invoiceAmount} /- (In Words Rupees ${amountWords}) for Transmission Service Charges for the month of ${invoice.invoiceMonth}.</p>
+                <p>You are, therefore, requested to release the above-mentioned amount of NRs. ${invoice.invoiceAmount}/- in favour of PTCN at the earliest.</p>
+                <p>Encl: as above</p>
+                <p>Thanking you,</p>
+                <p>Yours sincerely,<br>(Santosh Phuyal)<br>Chief Finance Officer<br>Power Transmission Company Nepal Limited</p>
+                <p>Cc: DMD (Finance Directorate)<br>NEA, Durbar Marg, Kathmandu</p>
+            `;
+
+            const modal = new bootstrap.Modal(document.getElementById("previewModal"));
+            modal.show();
+
+            document.getElementById("downloadWordBtn").onclick = () => saveAsWord(invoice, amountWords);
+            document.getElementById("downloadExcelBtn").onclick = () => saveAsExcel(invoice);
+        }
+
+        // Save as Word
+        function saveAsWord(invoice, amountWords) {
+            const doc = new docx.Document({
+                sections: [{
+                    properties: {},
+                    children: [
+                        new docx.Paragraph({
+                            children: [
+                                new docx.TextRun({
+                                    text: "Power Transmission Company Nepal Limited",
+                                    bold: true,
+                                    size: 28
+                                })
+                            ],
+                            alignment: docx.AlignmentType.CENTER
+                        }),
+                        new docx.Paragraph({
+                            children: [new docx.TextRun("Our Ref No. 2080/81 - Miti: 2081/01/20")]
+                        }),
+                        new docx.Paragraph({
+                            children: [new docx.TextRun(`Date: ${invoice.date}`)]
+                        }),
+                        new docx.Paragraph(""),
+                        new docx.Paragraph("The Managing Director"),
+                        new docx.Paragraph("Nepal Electricity Authority"),
+                        new docx.Paragraph("Durbar Marg, Kathmandu"),
+                        new docx.Paragraph("NEPAL"),
+                        new docx.Paragraph(""),
+                        new docx.Paragraph({
+                            children: [
+                                new docx.TextRun({
+                                    text: `Sub:- Transmission Service Charges for Dhalkebar - Bhittamod 400 kV D/C Transmission Line (Nepal Portion of Dhalkebar - Muzaffarpur -400 kV D/C Transmission Line) Invoice No. ${invoice.invoiceNo}`,
+                                    bold: true
+                                })
+                            ]
+                        }),
+                        new docx.Paragraph(""),
+                        new docx.Paragraph("Dear Sir,"),
+                        new docx.Paragraph("This has reference to the \"Implementation & Transmission Service Agreement\" signed between NEA & PTCN on December 13, 2011 for TLP-Nepal."),
+                        new docx.Paragraph(`As per Section-10 (Payment and Billing of Transmission Service Charges) of the said Agreement, we are enclosing herewith Invoice No. ${invoice.invoiceNo} dated ${invoice.date} for NRs. ${invoice.invoiceAmount} /- (In Words Rupees ${amountWords}) for Transmission Service Charges for the month of ${invoice.invoiceMonth}.`),
+                        new docx.Paragraph(`You are, therefore, requested to release the above-mentioned amount of NRs. ${invoice.invoiceAmount}/- in favour of PTCN at the earliest.`),
+                        new docx.Paragraph("Encl: as above"),
+                        new docx.Paragraph("Thanking you,"),
+                        new docx.Paragraph("Yours sincerely,"),
+                        new docx.Paragraph("(Santosh Phuyal)"),
+                        new docx.Paragraph("Chief Finance Officer"),
+                        new docx.Paragraph("Power Transmission Company Nepal Limited"),
+                        new docx.Paragraph(""),
+                        new docx.Paragraph("Cc: DMD (Finance Directorate)"),
+                        new docx.Paragraph("NEA, Durbar Marg, Kathmandu")
+                    ]
+                }]
+            });
+
+            docx.Packer.toBlob(doc).then(blob => {
+                saveAs(blob, `Invoice_${invoice.invoiceNo.replace(/\//g, '_')}.docx`);
+            });
+        }
+
+        // Save as Excel
+        function saveAsExcel(invoice) {
+            const wb = XLSX.utils.book_new();
+            const ws_data = [
+                ["days", "Month", "Invoice No", "No of days"],
+                [1, invoice.invoiceMonth, invoice.invoiceNo, 30] // Simplified; can expand with more logic
+            ];
+            const ws = XLSX.utils.aoa_to_sheet(ws_data);
+            XLSX.utils.book_append_sheet(wb, ws, "Invoice");
+            XLSX.writeFile(wb, `Invoice_${invoice.invoiceNo.replace(/\//g, '_')}.xlsx`);
+        }
+
+        // CRUD Operations
+        function editInvoice(index) {
+            const invoice = invoices[index];
+            document.getElementById("date").value = invoice.date;
+            document.getElementById("invoiceNo").value = invoice.invoiceNo;
+            document.getElementById("invoiceAmount").value = invoice.invoiceAmount;
+            document.getElementById("invoiceMonth").value = invoice.invoiceMonth;
+            document.getElementById("annualFixedCost").value = invoice.annualFixedCost;
+            invoices.splice(index, 1);
+            localStorage.setItem("invoices", JSON.stringify(invoices));
+            renderTable();
+        }
+
+        function deleteInvoice(index) {
+            invoices.splice(index, 1);
+            localStorage.setItem("invoices", JSON.stringify(invoices));
+            renderTable();
+        }
+
+        // Backup Data
+        document.getElementById("backupBtn").addEventListener("click", function () {
+            const data = JSON.stringify(invoices);
+            const blob = new Blob([data], { type: "application/json" });
+            saveAs(blob, "invoices_backup.json");
+        });
+
+        // Restore Data
+        document.getElementById("restoreBtn").addEventListener("click", function () {
+            document.getElementById("restoreFile").click();
+        });
+
+        document.getElementById("restoreFile").addEventListener("change", function (e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function (event) {
+                    invoices = JSON.parse(event.target.result);
+                    localStorage.setItem("invoices", JSON.stringify(invoices));
+                    renderTable();
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        // Initial render
+        renderTable();
+    </script>
+</body>
+</html>
